@@ -34,50 +34,50 @@ def intent_classifier(state: State) -> State:
     return state
 
 
-def generate_sql(state: State) -> State:
+def sql_generator(state: State) -> State:
     print(f"Generating SQL for query: {state['query']}")
     try:
-        state["sql"] = waii_generate_sql(question=state["query"])
+        state["sql"] = waii_sql_generator(question=state["query"])
         state["error"] = None
     except Exception as e:
         state["error"] = str(e)
     return state
 
 
-def execute_query(state: State) -> State:
+def sql_executor(state: State) -> State:
     print(f"Executing query: {state['sql']}")
     if state.get("error"):
         return state
     try:
-        state["data"] = waii_execute_query(query=state["sql"])
+        state["data"] = waii_sql_executor(query=state["sql"])
         state["error"] = None
     except Exception as e:
         state["error"] = str(e)
     return state
 
 
-def generate_chart(state: State) -> State:
+def chart_generator(state: State) -> State:
     print(f"Generating chart for data: {state['data']}")
     if state.get("error"):
         return state
     try:
-        state["chart"] = waii_generate_chart(state["data"])
+        state["chart"] = waii_chart_generator(state["data"])
         state["error"] = None
     except Exception as e:
         state["error"] = str(e)
     return state
 
 
-def generate_insight(state: State) -> State:
+def insight_generator(state: State) -> State:
     print(f"Generating insight for data: {state['data']}")
     if state.get("error"):
         return state
     # TODO: Need to fix this for integration with WAII
-    state["insight"] = waii_generate_insight(state["data"])
+    state["insight"] = waii_insight_generator(state["data"])
     return state
 
 
-def formulate_response(state: State) -> State:
+def result_synthesizer(state: State) -> State:
     print(f"Formulating response with insight")
     if state.get("error"):
         return state
@@ -93,10 +93,10 @@ def decision_step(state: State) -> State:
     # Example decision logic: If 'data' has more than one row, generate a chart.
     if len(state['data']) > 1:
         print("Decision: Generating chart")
-        state['path_decision'] = "generate_chart"
+        state['path_decision'] = "chart_generator"
     else:
         print("Decision: Generating insight")
-        state['path_decision'] = "generate_insight"
+        state['path_decision'] = "insight_generator"
     return state
 
 
@@ -105,15 +105,15 @@ def decision_step_conditional_branch(state: State):
     print(f"Routing based on path_decision: {state['path_decision']}")
 
     # Use send() to send the state to next node
-    if state['path_decision'] == "generate_chart":
-        return [Send("generate_chart", state)]
-    elif state['path_decision'] == "generate_insight":
-        return [Send("generate_insight", state)]
+    if state['path_decision'] == "chart_generator":
+        return [Send("chart_generator", state)]
+    elif state['path_decision'] == "insight_generator":
+        return [Send("insight_generator", state)]
     else:
         raise ValueError(f"Unknown path_decision: {state['path_decision']}")
 
 
-def should_retry_generic(state: State, success_next: str, retry_next: str = "generate_sql"):
+def should_retry_generic(state: State, success_next: str, retry_next: str = "sql_generator"):
     print(f"\tChecking if we should retry in {success_next}: error: {state.get('error')}")
     if state.get("error", None) and state.get("attempts", 0) < 3:
         state["attempts"] = state.get("attempts", 0) + 1
@@ -147,7 +147,7 @@ def waii_intent_classification(query: str) -> str:
     return "Something"
 
 
-def waii_generate_sql(question: str) -> str:
+def waii_sql_generator(question: str) -> str:
     try:
         query_id = str(uuid.uuid4())
         response = WAII.Query.generate(QueryGenerationRequest(uuid=query_id, ask=question))
@@ -157,7 +157,7 @@ def waii_generate_sql(question: str) -> str:
         return ""
 
 
-def waii_execute_query(query: str) -> str:
+def waii_sql_executor(query: str) -> str:
     try:
         response = WAII.Query.run(RunQueryRequest(query=query))
         print(f"Executed the query, num of rows: {len(response.rows)}")
@@ -167,18 +167,18 @@ def waii_execute_query(query: str) -> str:
         return ""
 
 
-def waii_generate_chart(data: str) -> str:
+def waii_chart_generator(data: str) -> str:
     try:
         # TODO: Need to convert data to df. This is dummy impl.
         df_data = pd.read_csv(StringIO(data))
-        response = WAII.Chart.generate_chart(df=df_data)
+        response = WAII.Chart.chart_generator(df=df_data)
         print(f"Chart spec: {response.chart_spec}")
         return response.chart_spec
     except Exception as e:
         print(f"Error generating chart: {e}")
         raise e
 
-def waii_generate_insight(param: str) -> str:
+def waii_insight_generator(param: str) -> str:
     # TODO: Need to integrate with WAII for generating query
     return "Insight: These are the top 5 directors."
 
@@ -187,32 +187,34 @@ def waii_generate_insight(param: str) -> str:
 workflow = StateGraph(State)
 
 # Add nodes to the graph
-workflow.add_node("intent_classifier", intent_classifier)
-workflow.add_node("generate_sql", generate_sql)
-workflow.add_node("execute_query", execute_query)
-workflow.add_node("generate_chart", generate_chart)
-workflow.add_node("generate_insight", generate_insight)
-workflow.add_node("formulate_response", formulate_response)
-workflow.add_node("decision_step", decision_step)
+workflow.add_node("Intent Classifier", intent_classifier)
+workflow.add_node("SQL Generator", sql_generator)
+workflow.add_node("SQL Executor", sql_executor)
+workflow.add_node("Chart Generator", chart_generator)
+workflow.add_node("Insight Generator", insight_generator)
+workflow.add_node("Result Synthesizer", result_synthesizer)
+#workflow.add_node("Error Handler", decision_step)
 
 # Define edges to control workflow execution
-workflow.add_edge(START, "intent_classifier")
-workflow.add_edge("intent_classifier", "generate_sql")
-workflow.add_edge("generate_sql", "execute_query")
-workflow.add_edge("execute_query", "decision_step")
-workflow.add_edge("generate_chart", "formulate_response")
-workflow.add_edge("generate_insight", "formulate_response")
-workflow.add_edge("formulate_response", END)
+workflow.add_edge(START, "Intent Classifier")
+workflow.add_edge("Intent Classifier", "SQL Generator")
+workflow.add_edge("Intent Classifier", "Chart Generator")
+workflow.add_edge("Intent Classifier", "Insight Generator")
+workflow.add_edge("SQL Generator", "SQL Executor")
+workflow.add_edge("SQL Executor", "Result Synthesizer")
+workflow.add_edge("Chart Generator", "Result Synthesizer")
+workflow.add_edge("Insight Generator", "Result Synthesizer")
+workflow.add_edge("Result Synthesizer", END)
 
 # Add conditional edge for error handling in respective nodes
 # TODO: Disabling it as there were issues in sending state correctly.
-#workflow.add_conditional_edges("generate_sql", create_retry_func("execute_query"))
-#workflow.add_conditional_edges("execute_query", create_retry_func("decision_step"))
-#workflow.add_conditional_edges("generate_chart", create_retry_func("formulate_response"))
-#workflow.add_conditional_edges("generate_insight", create_retry_func("formulate_response"))
+#workflow.add_conditional_edges("sql_generator", create_retry_func("sql_executor"))
+#workflow.add_conditional_edges("sql_executor", create_retry_func("decision_step"))
+#workflow.add_conditional_edges("chart_generator", create_retry_func("result_synthesizer"))
+#workflow.add_conditional_edges("insight_generator", create_retry_func("result_synthesizer"))
 
-# Add conditional edge from decision step so that we can jump to either generate_chart or generate_insight
-workflow.add_conditional_edges("decision_step", decision_step_conditional_branch)
+# Add conditional edge from decision step so that we can jump to either chart_generator or insight_generator
+#workflow.add_conditional_edges("decision_step", decision_step_conditional_branch)
 
 # init WAII related APIs.
 init_waii()
