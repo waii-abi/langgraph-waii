@@ -1,6 +1,6 @@
 import uuid
 from io import StringIO
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 import pandas as pd
 from pydantic import BaseModel
@@ -13,7 +13,7 @@ from waii_sdk_py.query import QueryGenerationRequest, RunQueryRequest
 class State(BaseModel):
     query: str = ''
     sql: str = ''
-    data: List[str] = []
+    data: List[Dict[str, Any]] = []
     chart: str = ''
     insight: str = ''
     response: str = ''
@@ -34,23 +34,23 @@ def intent_classifier(state: State) -> State:
     else:
         return state.model_copy(update={"error": "Unknown intent"})
 
-def sql_generator(state: State) -> dict:
+def sql_generator(state: State) -> State:
     print(f"Generating SQL for query: {state.query}")
     try:
         sql = waii_sql_generator(question=state.query)
-        return {"sql": sql, "error": None}
+        return state.model_copy(update={"sql": sql})
     except Exception as e:
-        return {"error": str(e)}
+        return state.model_copy(update={"error": str(e)})
 
-def sql_executor(state: State) -> dict:
+def sql_executor(state: State) -> State:
     print(f"Executing query: {state.sql}")
     if state.error:
-        return {}
+        return state
     try:
         data = waii_sql_executor(query=state.sql)
-        return {"data": data, "error": None}
+        return state.model_copy(update={"data": data})
     except Exception as e:
-        return {"error": str(e)}
+        return state.model_copy(update={"error": str(e)})
 
 def chart_generator(state: State) -> dict:
     print(f"Generating chart for data: {state.data}")
@@ -70,12 +70,16 @@ def insight_generator(state: State) -> dict:
     insight = waii_insight_generator(state.data)
     return {"insight": insight}
 
-def result_synthesizer(state: State) -> dict:
+def result_synthesizer(state: State) -> State:
     print(f"Formulating response with insight")
     if state.error:
-        return {}
-    # TODO: Need to fix this for integration with WAII
-    return {"response": "Here is the formulated response", "error": None}
+        return state
+    # Create a response based on the data
+    response = "Here are the results of your query:\n"
+    for row in state.data:
+        response += " | ".join([f"{key}: {value}" for key, value in row.items()])
+        response += "\n"
+    return state.model_copy(update={"response": response})
 
 def decision_step(state: State) -> dict:
     print("Deciding the next step based on the query result...")
@@ -194,7 +198,8 @@ print(app.get_graph().draw_ascii())
 def run_workflow(query: str) -> str:
     initial_state = State(query=query, attempts=0)
     final_state = app.invoke(initial_state)
-    return final_state.response
+
+    return final_state['response']
 
 # Example usage
 if __name__ == "__main__":
