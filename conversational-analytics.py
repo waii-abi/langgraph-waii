@@ -175,8 +175,6 @@ class LanggraphWorkflowManager:
         # Create the language model
         model = ChatOpenAI()
 
-        print(database_description)
-
         # Create the chat prompt template
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an expert in classifying questions into 'database', 'visualization', or 'insight'. Use 'database' if the question can be answered from the movie and tv database, 'visualization' if the user would be best served by a graph, 'insight' if it's a general question you can answer from memory. Prefer 'database' if multiple apply. Here is a description of what's in the database: '\n---\n{database_description}\n---\n'"),
@@ -187,7 +185,6 @@ class LanggraphWorkflowManager:
         # Create the chain
         chain = prompt | model | StrOutputParser()
 
-        print(query)
         # Invoke the chain and get the classification
         classification = chain.invoke({"query": query, "database_description": database_description}).strip().lower()
 
