@@ -50,7 +50,7 @@ class LanggraphWorkflowManager:
         execution_retry_policy = RetryPolicy(max_attempts=3, backoff_factor=2.0, initial_interval=0.5, retry_on=Exception)
 
         # Add nodes to the graph
-        workflow.add_node("Intent Classifier", self.intent_classifier)
+        workflow.add_node("Question Classifier", self.question_classifier)
         workflow.add_node("SQL Generator", self.sql_generator, retry=sql_retry_policy)
         workflow.add_node("SQL Executor", self.sql_executor, retry=execution_retry_policy)
         workflow.add_node("Chart Generator", self.chart_gen)
@@ -58,9 +58,9 @@ class LanggraphWorkflowManager:
         workflow.add_node("Result Synthesizer", self.result_synthesizer)
 
         # Define edges to control workflow execution
-        workflow.set_entry_point("Intent Classifier")
+        workflow.set_entry_point("Question Classifier")
         workflow.add_conditional_edges(
-            "Intent Classifier",
+            "Question Classifier",
             lambda state: state.path_decision,
             {
                 "database": "SQL Generator",
@@ -74,7 +74,7 @@ class LanggraphWorkflowManager:
         workflow.add_edge("Insight Generator", "Result Synthesizer")
 
         # Loop through the workflow
-        workflow.add_edge("Result Synthesizer", "Intent Classifier")
+        workflow.add_edge("Result Synthesizer", "Question Classifier")
 
         return workflow
 
@@ -85,15 +85,15 @@ class LanggraphWorkflowManager:
             sys.exit()
         return query
 
-    def intent_classifier(self, state: State) -> State:
+    def question_classifier(self, state: State) -> State:
 
         state.query = self.get_user_input()
 
         # Classify the question to one of sql, insight, data_visualization, or unknown
-        intent = self.waii_intent_classification(query=state.query)
+        question = self.waii_question_classification(query=state.query)
 
-        if intent in ["database", "insight", "visualization"]:
-            return state.model_copy(update={"path_decision": intent, "error": None})
+        if question in ["database", "insight", "visualization"]:
+            return state.model_copy(update={"path_decision": question, "error": None})
 
     def sql_generator(self, state: State) -> State:
         print(f"Generating SQL for query: {state.query}")
@@ -149,7 +149,7 @@ class LanggraphWorkflowManager:
         print(f"Response: {response}")
         return state.model_copy(update={"response": response}, deep=True)
 
-    def waii_intent_classification(self, query: str) -> str:
+    def waii_question_classification(self, query: str) -> str:
         # Create the language model
         model = ChatOpenAI()
 
