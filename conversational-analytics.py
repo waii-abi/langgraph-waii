@@ -13,6 +13,7 @@ from waii_sdk_py import WAII
 from waii_sdk_py.query import QueryGenerationRequest, RunQueryRequest
 
 class State(BaseModel):
+    database_description: str = ''
     query: str = ''
     sql: str = ''
     data: List[Dict[str, Any]] = []
@@ -33,6 +34,24 @@ class LanggraphWorkflowManager:
         self.init_waii()
         print(f"Initialized Langgraph workflow:")
         print(self.app.get_graph().draw_ascii())
+
+    def format_catalog_info(self, catalogs):
+        formatted_info = []
+
+        for catalog in catalogs.catalogs:
+            catalog_name = catalog.name
+            formatted_info.append(f"Database: {catalog_name}")
+
+            for schema in catalog.schemas:
+                schema_name = schema.name.schema_name
+                schema_description = schema.description
+
+                formatted_info.append(f"  Schema: {schema_name}")
+                formatted_info.append(f"    Description: {schema_description}")
+
+            formatted_info.append("")
+
+        return "\n".join(formatted_info)
 
     def init_waii(self):
         url = 'http://localhost:9859/api/'
@@ -87,10 +106,13 @@ class LanggraphWorkflowManager:
 
     def question_classifier(self, state: State) -> State:
 
+        if not state.database_description:
+            state.database_description = self.format_catalog_info(WAII.Database.get_catalogs())
+
         state.query = self.get_user_input()
 
         # Classify the question to one of sql, insight, data_visualization, or unknown
-        question = self.waii_question_classification(query=state.query)
+        question = self.waii_question_classification(query=state.query, database_description=state.database_description)
 
         if question in ["database", "insight", "visualization"]:
             return state.model_copy(update={"path_decision": question, "error": None})
@@ -149,13 +171,15 @@ class LanggraphWorkflowManager:
         print(f"Response: {response}")
         return state.model_copy(update={"response": response}, deep=True)
 
-    def waii_question_classification(self, query: str) -> str:
+    def waii_question_classification(self, query: str, database_description: str) -> str:
         # Create the language model
         model = ChatOpenAI()
 
+        print(database_description)
+
         # Create the chat prompt template
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are an expert in classifying questions into 'database', 'visualization', or 'insight'. Use 'database' if the question can be answered from the movie and tv database, 'visualization' if the user would be best served by a graph, 'insight' if it's a general question you can answer from memory. Prefer 'database' if multiple apply."),
+            ("system", "You are an expert in classifying questions into 'database', 'visualization', or 'insight'. Use 'database' if the question can be answered from the movie and tv database, 'visualization' if the user would be best served by a graph, 'insight' if it's a general question you can answer from memory. Prefer 'database' if multiple apply. Here is a description of what's in the database: '\n---\n{database_description}\n---\n'"),
             ("human", "Can you classify the following question into one of these categories? Question: '{query}'. "
              "Output: Strictly respond with either 'database', 'visualization', or 'insight'. No additional text.")
         ])
@@ -165,7 +189,7 @@ class LanggraphWorkflowManager:
 
         print(query)
         # Invoke the chain and get the classification
-        classification = chain.invoke({"query": query}).strip().lower()
+        classification = chain.invoke({"query": query, "database_description": database_description}).strip().lower()
 
         # Return the classification, mapping 'others' to 'unknown'
         if classification in ["database", "visualization", "insight"]:
