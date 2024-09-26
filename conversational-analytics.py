@@ -124,7 +124,7 @@ class LanggraphWorkflowManager:
     def chart_gen(self, state: State) -> State:
         print(f"Generating chart for data: {state.data}")
         if state.error:
-            return {}
+            return state
         try:
             chart = self.waii_chart_generator(state.data)
             return state.model_copy(update={"chart": str(chart), "error": None}, deep=True)
