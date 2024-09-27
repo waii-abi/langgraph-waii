@@ -6,5 +6,4 @@ langchain-openai
 langgraph
 grandalf
 waii_sdk_py
-uuid
-
+plotly
