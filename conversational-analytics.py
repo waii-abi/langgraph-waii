@@ -29,8 +29,45 @@ class LanggraphWorkflowManager:
         self.workflow = self.create_workflow()
         self.app = self.workflow.compile()
         self.init_waii()
-        print(f"Initialized Langgraph workflow:")
         print(self.app.get_graph().draw_ascii())
+
+    def init_waii(self):
+        url = 'http://localhost:9859/api/'
+        api_key = ''
+        db_connection_str = 'snowflake://WAII_USER@gqobxjv-bhb91428/MOVIE_DB?role=WAII_USER_ROLE&warehouse=COMPUTE_WH'
+        WAII.initialize(url=url, api_key=api_key)
+        WAII.Database.activate_connection(db_connection_str)
+        print(f"Initialized WAII with connection: {db_connection_str}")
+
+    def create_workflow(self) -> StateGraph:
+        workflow = StateGraph(State)
+
+        workflow.add_node("Question Classifier", self.question_classifier)
+        workflow.add_node("SQL Generator", self.sql_generator)
+        workflow.add_node("SQL Executor", self.sql_executor)
+        workflow.add_node("Chart Generator", self.chart_gen)
+        workflow.add_node("Insight Generator", self.insight_generator)
+        workflow.add_node("Result Synthesizer", self.result_synthesizer)
+
+        workflow.set_entry_point("Question Classifier")
+        workflow.add_conditional_edges(
+            "Question Classifier",
+            lambda state: state.path_decision,
+            {
+                "database": "SQL Generator",
+                "visualization": "Chart Generator",
+                "insight": "Insight Generator"
+            }
+        )
+
+        workflow.add_edge("SQL Generator", "SQL Executor")
+        workflow.add_edge("SQL Executor", "Result Synthesizer")
+        workflow.add_edge("Chart Generator", "Result Synthesizer")
+        workflow.add_edge("Insight Generator", "Result Synthesizer")
+
+        workflow.add_edge("Result Synthesizer", "Question Classifier")
+
+        return workflow
 
     def format_catalog_info(self, catalogs):
         formatted_info = []
@@ -50,101 +87,39 @@ class LanggraphWorkflowManager:
 
         return "\n".join(formatted_info)
 
-    def init_waii(self):
-        url = 'http://localhost:9859/api/'
-        api_key = ''
-        db_connection_str = 'snowflake://WAII_USER@gqobxjv-bhb91428/MOVIE_DB?role=WAII_USER_ROLE&warehouse=COMPUTE_WH'
-        WAII.initialize(url=url, api_key=api_key)
-        WAII.Database.activate_connection(db_connection_str)
-        print(f"Initialized WAII with connection: {db_connection_str}")
-
-    def create_workflow(self) -> StateGraph:
-        workflow = StateGraph(State)
-
-        # Add nodes to the graph
-        workflow.add_node("Question Classifier", self.question_classifier)
-        workflow.add_node("SQL Generator", self.sql_generator)
-        workflow.add_node("SQL Executor", self.sql_executor)
-        workflow.add_node("Chart Generator", self.chart_gen)
-        workflow.add_node("Insight Generator", self.insight_generator)
-        workflow.add_node("Result Synthesizer", self.result_synthesizer)
-
-        # Define edges to control workflow execution
-        workflow.set_entry_point("Question Classifier")
-        workflow.add_conditional_edges(
-            "Question Classifier",
-            lambda state: state.path_decision,
-            {
-                "database": "SQL Generator",
-                "visualization": "Chart Generator",
-                "insight": "Insight Generator"
-            }
-        )
-        workflow.add_edge("SQL Generator", "SQL Executor")
-        workflow.add_edge("SQL Executor", "Result Synthesizer")
-        workflow.add_edge("Chart Generator", "Result Synthesizer")
-        workflow.add_edge("Insight Generator", "Result Synthesizer")
-
-        # Loop through the workflow
-        workflow.add_edge("Result Synthesizer", "Question Classifier")
-
-        return workflow
-
-    def get_user_input(self):
-        query = input("Enter your question (Type 'exit' to quit): ")
-        if query.lower() == "exit":
-            print(f"Exiting...")
-            sys.exit()
-        return query
-
     def question_classifier(self, state: State) -> State:
 
-        if not state.database_description:
-            state.database_description = self.format_catalog_info(WAII.Database.get_catalogs())
+        state.database_description = self.format_catalog_info(WAII.Database.get_catalogs())
+        state.query = input("Enter your question: ")
 
-        state.query = self.get_user_input()
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are an expert in classifying questions into 'database', 'visualization', or 'insight'. Use 'database' if the question can be answered from the movie and tv database, 'visualization' if the user would be best served by a graph, 'insight' if it's a general question you can answer from memory. Prefer 'database' if multiple apply. Here is a description of what's in the database: '\n---\n{database_description}\n---\n'"),
+            ("human", "Can you classify the following question into one of these categories? Question: '{query}'. "
+             "Output: Strictly respond with either 'database', 'visualization', or 'insight'. No additional text.")
+        ])
+        chain = prompt | ChatOpenAI() | StrOutputParser()
+        classification = chain.invoke({"query": state.query, "database_description": state.database_description}).strip().lower()
 
-        # Classify the question to one of sql, insight, data_visualization
-        question = self.waii_question_classification(query=state.query, database_description=state.database_description)
-
-        if question in ["database", "insight", "visualization"]:
-            return state.model_copy(update={"path_decision": question, "error": None})
+        return state.model_copy(update={"path_decision": classification, "error": None})
 
     def sql_generator(self, state: State) -> State:
-        print(f"Generating SQL for query: {state.query}")
-        try:
-            sql = self.waii_sql_generator(question=state.query)
-            return state.model_copy(update={"sql": sql})
-        except Exception as e:
-            raise Exception(f"Error in SQL generation: {str(e)}")
+        sql = WAII.Query.generate(QueryGenerationRequest(ask=state.query)).query
+        return state.model_copy(update={"sql": sql})
 
     def sql_executor(self, state: State) -> State:
-        print(f"Executing query: {state.query}")
-        try:
-            data = self.waii_sql_executor(query=state.sql)
-            updated_state = state.model_copy(update={"data": data}, deep=True)
-            print(f"State after exec: {updated_state}")
-            return updated_state
-        except Exception as e:
-            raise Exception(f"Error in SQL generation: {str(e)}")
+        data = WAII.Query.run(RunQueryRequest(query=state.sql)).rows
+        return state.model_copy(update={"data": data}, deep=True)
 
     def chart_gen(self, state: State) -> State:
-        print(f"Generating chart for data: {state.data}")
-        if state.error:
-            return state
-        try:
-            chart = self.waii_chart_generator(state.data)
-            return state.model_copy(update={"chart": str(chart), "error": None}, deep=True)
-        except Exception as e:
-            return state.model_copy(update={"error": str(e)})
+        df_data = pd.DataFrame(state.data)
+        chart = WAII.Chart.generate_chart(df=df_data).chart_spec
+        return state.model_copy(update={"chart": str(chart), "error": None}, deep=True)
 
     def insight_generator(self, state: State) -> dict:
-        print(f"Generating insight for data: {state.query}")
-        if state.error:
-            return {}
-        # TODO: Need to fix this for integration with WAII
-        insight = self.waii_insight_generator(state.data)
-        return {"insight": insight}
+        prompt = ChatPromptTemplate.from_messages([("human", "{query}")])
+        chain = prompt | ChatOpenAI() | StrOutputParser()
+        insight = chain.invoke({"query": state.query})
+        return state.model_copy(update={"insight": insight, "error": None}, deep=True)
 
     def format_data(self, data: List[Dict[str, Any]]) -> str:
         formatted_data = ""
@@ -154,104 +129,19 @@ class LanggraphWorkflowManager:
         return formatted_data
 
     def result_synthesizer(self, state: State) -> State:
-        print(f"Formulating response with insight")
-        if state.error:
-            print(f"Error in previous step: {state.error}")
-            return state
 
         model = ChatOpenAI()
-
-        # Create the chat prompt template
         prompt = ChatPromptTemplate.from_messages([
-            ("system",
-             "You are an expert assistant in analyzing data"),
-            ("human", "Here is a description of what's in the database: "
-                      "\n---\n{database_description}\n---\n'. "
-                      "\n User Question: '{query}'. "
-                      "\n Generated SQL: '{sql}'. "
-                      "\n Results of query: '{data}'."
-                      "\n If the data is suitable for visualization, format it accordingly. For e.g if it is table format, provide column headers, properly align columns and format it professionally."
-                      "\n\n Output: Analyze and present the data in the most user-friendly and insightful format. Identify any key insights, trends or patterns and mention it if applicable, in not more than 30 words.")
+            ("system", "You are an expert assistant in analyzing data"),
+            ("human", "\n User Question: '{query}'. "
+                             "\n Results of query (if any): '{data}'."
+                             "\n LLM results (if any): '{insight}'."
+                             "\n\n Instructions: Answer the user with this information.")
         ])
-
         chain = prompt | model | StrOutputParser()
-
-        output = chain.invoke({"query": state.query, "database_description": state.database_description,
-                               "sql": state.sql, "data": self.format_data(state.data)}).strip().lower()
-
-        print(f"Response: \n {output}")
+        output = chain.invoke({"query": state.query, "data": self.format_data(state.data), "insight": state.insight}).strip().lower()
+        print(output)
         return state.model_copy(update={"response": output}, deep=True)
-
-    def waii_question_classification(self, query: str, database_description: str) -> str:
-        # Create the language model
-        model = ChatOpenAI()
-
-        # Create the chat prompt template
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are an expert in classifying questions into 'database', 'visualization', or 'insight'. Use 'database' if the question can be answered from the movie and tv database, 'visualization' if the user would be best served by a graph, 'insight' if it's a general question you can answer from memory. Prefer 'database' if multiple apply. Here is a description of what's in the database: '\n---\n{database_description}\n---\n'"),
-            ("human", "Can you classify the following question into one of these categories? Question: '{query}'. "
-             "Output: Strictly respond with either 'database', 'visualization', or 'insight'. No additional text.")
-        ])
-
-        # Create the chain
-        chain = prompt | model | StrOutputParser()
-
-        # Invoke the chain and get the classification
-        classification = chain.invoke({"query": query, "database_description": database_description}).strip().lower()
-
-        # Return the classification, mapping 'others' to 'unknown'
-        if classification in ["database", "visualization", "insight"]:
-            return classification
-        else:
-            return "insight"
-
-    def waii_sql_generator(self, question: str) -> str:
-        try:
-            query_id = str(uuid.uuid4())
-            response = WAII.Query.generate(QueryGenerationRequest(uuid=query_id, ask=question))
-            return response.query
-        except Exception as e:
-            print(f"Error generating query: {e}")
-            return ""
-
-    def waii_sql_executor(self, query: str) -> List[str]:
-        try:
-            response = WAII.Query.run(RunQueryRequest(query=query))
-            print(f"Executed the query, num of rows: {len(response.rows)}")
-            return response.rows
-        except Exception as e:
-            print(f"Error executing query: {e}")
-            return []
-
-    def waii_chart_generator(self, data: List[Dict[str, Any]]) -> str:
-        try:
-            df_data = pd.DataFrame(data)
-            response = WAII.Chart.generate_chart(df=df_data)
-
-            print(f"Chart spec: {response.chart_spec}")
-            return response.chart_spec
-        except Exception as e:
-            print(f"Error generating chart: {e}")
-            raise e
-
-    def waii_insight_generator(self, query: str) -> str:
-        # Create the language model
-        model = ChatOpenAI()
-
-        # Create the chat prompt template
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are an AI assistant that generates insightful responses to any query. Provide a concise, relevant insight based on the user's question."),
-            ("human", "Please provide an insightful response to the following question: '{query}'. "
-             "Your response should be informative and directly address the query.")
-        ])
-
-        # Create the chain
-        chain = prompt | model | StrOutputParser()
-
-        # Generate the insight
-        insight = chain.invoke({"query": query})
-
-        return insight.strip()
 
     def run_workflow(self):
         while True:
@@ -262,7 +152,4 @@ class LanggraphWorkflowManager:
             except Exception as e:
                 print(f"Error in workflow: {e}. Will restart.")
 
-
-if __name__ == "__main__":
-    workflow_manager = LanggraphWorkflowManager()
-    workflow_manager.run_workflow()
+LanggraphWorkflowManager().run_workflow()
