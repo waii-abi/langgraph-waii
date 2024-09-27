@@ -104,7 +104,7 @@ class LanggraphWorkflowManager:
 
         state.query = self.get_user_input()
 
-        # Classify the question to one of sql, insight, data_visualization, or unknown
+        # Classify the question to one of sql, insight, data_visualization
         question = self.waii_question_classification(query=state.query, database_description=state.database_description)
 
         if question in ["database", "insight", "visualization"]:
@@ -146,19 +146,41 @@ class LanggraphWorkflowManager:
         insight = self.waii_insight_generator(state.data)
         return {"insight": insight}
 
+    def format_data(self, data: List[Dict[str, Any]]) -> str:
+        formatted_data = ""
+        for row in data:
+            formatted_data += " | ".join([f"{key}: {value}" for key, value in row.items()])
+            formatted_data += "\n"
+        return formatted_data
+
     def result_synthesizer(self, state: State) -> State:
         print(f"Formulating response with insight")
         if state.error:
             print(f"Error in previous step: {state.error}")
             return state
 
-        # Create a response based on the data
-        response = "Here are the results of your query:\n"
-        for row in state.data:
-            response += " | ".join([f"{key}: {value}" for key, value in row.items()])
-            response += "\n"
-        print(f"Response: {response}")
-        return state.model_copy(update={"response": response}, deep=True)
+        model = ChatOpenAI()
+
+        # Create the chat prompt template
+        prompt = ChatPromptTemplate.from_messages([
+            ("system",
+             "You are an expert assistant in analyzing data"),
+            ("human", "Here is a description of what's in the database: "
+                      "\n---\n{database_description}\n---\n'. "
+                      "\n User Question: '{query}'. "
+                      "\n Generated SQL: '{sql}'. "
+                      "\n Results of query: '{data}'."
+                      "\n If the data is suitable for visualization, format it accordingly. For e.g if it is table format, provide column headers, properly align columns and format it professionally."
+                      "\n\n Output: Analyze and present the data in the most user-friendly and insightful format. Identify any key insights, trends or patterns and mention it if applicable, in not more than 30 words.")
+        ])
+
+        chain = prompt | model | StrOutputParser()
+
+        output = chain.invoke({"query": state.query, "database_description": state.database_description,
+                               "sql": state.sql, "data": self.format_data(state.data)}).strip().lower()
+
+        print(f"Response: \n {output}")
+        return state.model_copy(update={"response": output}, deep=True)
 
     def waii_question_classification(self, query: str, database_description: str) -> str:
         # Create the language model
