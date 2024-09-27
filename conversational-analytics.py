@@ -4,7 +4,6 @@ from typing import List, Optional, Dict, Any
 
 import pandas as pd
 from langgraph.graph import StateGraph
-from langgraph.types import RetryPolicy
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema import StrOutputParser
@@ -22,8 +21,6 @@ class State(BaseModel):
     response: str = ''
     error: Optional[str] = None
     path_decision: str = ""
-    simulate_error_sql_gen: bool = False
-    simulate_error_sql_exec: bool = False
 
 class LanggraphWorkflowManager:
 
@@ -64,14 +61,10 @@ class LanggraphWorkflowManager:
     def create_workflow(self) -> StateGraph:
         workflow = StateGraph(State)
 
-        # Define retry policies
-        sql_retry_policy = RetryPolicy(max_attempts=3, backoff_factor=2.0, initial_interval=0.5, retry_on=Exception)
-        execution_retry_policy = RetryPolicy(max_attempts=3, backoff_factor=2.0, initial_interval=0.5, retry_on=Exception)
-
         # Add nodes to the graph
         workflow.add_node("Question Classifier", self.question_classifier)
-        workflow.add_node("SQL Generator", self.sql_generator, retry=sql_retry_policy)
-        workflow.add_node("SQL Executor", self.sql_executor, retry=execution_retry_policy)
+        workflow.add_node("SQL Generator", self.sql_generator)
+        workflow.add_node("SQL Executor", self.sql_executor)
         workflow.add_node("Chart Generator", self.chart_gen)
         workflow.add_node("Insight Generator", self.insight_generator)
         workflow.add_node("Result Synthesizer", self.result_synthesizer)
@@ -119,8 +112,6 @@ class LanggraphWorkflowManager:
 
     def sql_generator(self, state: State) -> State:
         print(f"Generating SQL for query: {state.query}")
-        if state.simulate_error_sql_gen:
-            raise Exception("Error in SQL generation")
         try:
             sql = self.waii_sql_generator(question=state.query)
             return state.model_copy(update={"sql": sql})
@@ -129,8 +120,6 @@ class LanggraphWorkflowManager:
 
     def sql_executor(self, state: State) -> State:
         print(f"Executing query: {state.query}")
-        if state.simulate_error_sql_exec:
-            raise Exception("Error in SQL execution")
         try:
             data = self.waii_sql_executor(query=state.sql)
             updated_state = state.model_copy(update={"data": data}, deep=True)
@@ -245,7 +234,6 @@ class LanggraphWorkflowManager:
     def run_workflow(self):
         while True:
             try:
-                # Use simulate_error_sql_exec=True or simulate_error_sql_gen=True to simulate errors
                 initial_state = State()
                 app_response = self.app.invoke(initial_state)
                 print(f"{app_response['response']}")
