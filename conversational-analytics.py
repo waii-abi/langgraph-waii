@@ -1,5 +1,4 @@
 import os
-import sys
 from typing import List, Optional, Dict, Any
 
 import pandas as pd
@@ -149,7 +148,7 @@ class LanggraphWorkflowManager:
         while True:
             try:
                 initial_state = State()
-                app_response = self.app.invoke(initial_state)
+                self.app.invoke(initial_state)
             except Exception as e:
                 print(f"Error in workflow: {e}. Will restart.")
 
