@@ -104,7 +104,7 @@ class LanggraphWorkflowManager:
         classification = chain.invoke({"query": state.query}).strip().lower()
         return state.model_copy(update={"path_decision": classification, "error": None})
 
-    def insight_generator(self, state: State) -> dict:
+    def insight_generator(self, state: State) -> State:
         prompt = ChatPromptTemplate.from_messages([("human", "{query}")])
         chain = prompt | ChatOpenAI() | StrOutputParser()
         insight = chain.invoke({"query": state.query})
